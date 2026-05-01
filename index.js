@@ -15,7 +15,7 @@ app.get("/", (req, res) => {
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => {
-  console.log("Web server đang chạy tại port", PORT);
+  console.log("Web server chạy tại port", PORT);
 });
 
 // ===== AUTO PING =====
@@ -26,7 +26,7 @@ if (URL) {
     try {
       await axios.get(URL);
       console.log("Ping giữ bot sống");
-    } catch (err) {}
+    } catch {}
   }, 5 * 60 * 1000);
 }
 
@@ -49,6 +49,7 @@ const openai = new OpenAI({
 const activeUsers = new Map();
 const conversations = new Map();
 const userLang = new Map();
+const translateMode = new Map(); // 🔥 chế độ dịch
 
 // ===== READY =====
 client.on("clientReady", () => {
@@ -85,7 +86,7 @@ client.on("messageCreate", async (message) => {
   const userId = message.author.id;
   const content = message.content.toLowerCase();
 
-  // ===== ĐỔI NGÔN NGỮ =====
+  // ===== NGÔN NGỮ =====
   if (content === "!vi") {
     userLang.set(userId, "vi");
     return message.reply("Đã chuyển sang tiếng Việt 🇻🇳");
@@ -101,6 +102,27 @@ client.on("messageCreate", async (message) => {
     return message.reply("已切换到中文 🇨🇳");
   }
 
+  // ===== CHẾ ĐỘ DỊCH =====
+  if (content === "!dichcn") {
+    translateMode.set(userId, "cn");
+    return message.reply("Đã bật dịch sang tiếng Trung 🇨🇳");
+  }
+
+  if (content === "!dichen") {
+    translateMode.set(userId, "en");
+    return message.reply("Đã bật dịch sang tiếng Anh 🇺🇸");
+  }
+
+  if (content === "!dichvn") {
+    translateMode.set(userId, "vi");
+    return message.reply("Đã bật dịch sang tiếng Việt 🇻🇳");
+  }
+
+  if (content === "!tatdich") {
+    translateMode.delete(userId);
+    return message.reply("Đã tắt chế độ dịch ❌");
+  }
+
   // ===== RESET =====
   if (
     content === "reset" ||
@@ -112,6 +134,41 @@ client.on("messageCreate", async (message) => {
     return message.reply("Đã reset 🆕");
   }
 
+  // ===== ƯU TIÊN CHẾ ĐỘ DỊCH =====
+  if (translateMode.has(userId)) {
+    const lang = translateMode.get(userId);
+
+    let targetLang =
+      lang === "vi" ? "Tiếng Việt" :
+      lang === "en" ? "English" :
+      "中文";
+
+    try {
+      await message.channel.sendTyping();
+
+      const res = await openai.chat.completions.create({
+        model: "openai/gpt-4o-mini",
+        messages: [
+          {
+            role: "system",
+            content: "Bạn là công cụ dịch. Chỉ dịch, không giải thích."
+          },
+          {
+            role: "user",
+            content: `Dịch sang ${targetLang}: ${message.content}`
+          }
+        ]
+      });
+
+      return message.reply(res.choices[0].message.content);
+
+    } catch (err) {
+      console.error(err);
+      return message.reply("Lỗi dịch 😢");
+    }
+  }
+
+  // ===== CHAT AI =====
   const isMention = message.mentions.has(client.user);
 
   if (isMention) {
@@ -146,18 +203,17 @@ client.on("messageCreate", async (message) => {
     prompt = "Mô tả ảnh này";
   }
 
-  // ===== NGÔN NGỮ + PROMPT XỊN =====
   const lang = userLang.get(userId) || "vi";
 
   let systemPrompt = `
 Bạn là một AI nói chuyện tự nhiên như người thật.
 
-- Không trả lời máy móc
-- Không nói kiểu sách giáo khoa
 - Trả lời giống chat đời thường
-- Có thể thêm cảm xúc nhẹ 😄😅😎
-- Nếu hợp lý, hỏi lại để tiếp tục câu chuyện
-- Không nói "tôi là AI"
+- Không máy móc
+- Không sách giáo khoa
+- Có thể thêm cảm xúc 😄😅😎
+- Nếu hợp lý, hỏi lại
+- Trả lời đúng ngôn ngữ
 
 Ngôn ngữ: ${
     lang === "vi"
@@ -168,24 +224,22 @@ Ngôn ngữ: ${
   }
 `;
 
-  // ===== HISTORY =====
   if (!conversations.has(userId)) {
-    conversations.set(userId, [
-      {
-        role: "system",
-        content: systemPrompt
-      }
-    ]);
+    conversations.set(userId, []);
   }
 
   const history = conversations.get(userId);
+
+  history[0] = {
+    role: "system",
+    content: systemPrompt
+  };
 
   history.push({
     role: "user",
     content: `Người dùng nói: ${prompt}`
   });
 
-  // tăng memory
   if (history.length > 20) history.splice(1, 1);
 
   try {
