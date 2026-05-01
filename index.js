@@ -5,7 +5,7 @@ const axios = require("axios");
 const { Client, GatewayIntentBits } = require("discord.js");
 const OpenAI = require("openai");
 
-// ===== WEB SERVER (Render) =====
+// ===== WEB SERVER =====
 const app = express();
 
 app.get("/", (req, res) => {
@@ -18,17 +18,15 @@ app.listen(PORT, () => {
   console.log("Web server đang chạy tại port", PORT);
 });
 
-// ===== AUTO PING (5 PHÚT) =====
-const URL = process.env.RENDER_URL; // set trong ENV
+// ===== AUTO PING =====
+const URL = process.env.RENDER_URL;
 
 if (URL) {
   setInterval(async () => {
     try {
       await axios.get(URL);
-      console.log("Đã ping giữ bot sống");
-    } catch (err) {
-      console.error("Ping lỗi:", err.message);
-    }
+      console.log("Ping giữ bot sống");
+    } catch (err) {}
   }, 5 * 60 * 1000);
 }
 
@@ -50,6 +48,7 @@ const openai = new OpenAI({
 // ===== MEMORY =====
 const activeUsers = new Map();
 const conversations = new Map();
+const userLang = new Map();
 
 // ===== READY =====
 client.on("clientReady", () => {
@@ -62,7 +61,6 @@ async function askAI(history, imageUrl = null) {
 
   if (imageUrl) {
     const last = messages.pop();
-
     messages.push({
       role: "user",
       content: [
@@ -85,31 +83,45 @@ client.on("messageCreate", async (message) => {
   if (message.author.bot) return;
 
   const userId = message.author.id;
+  const content = message.content.toLowerCase();
 
-  // ===== RESET CHAT =====
+  // ===== ĐỔI NGÔN NGỮ =====
+  if (content === "!vi") {
+    userLang.set(userId, "vi");
+    return message.reply("Đã chuyển sang tiếng Việt 🇻🇳");
+  }
+
+  if (content === "!en") {
+    userLang.set(userId, "en");
+    return message.reply("Switched to English 🇺🇸");
+  }
+
+  if (content === "!cn") {
+    userLang.set(userId, "cn");
+    return message.reply("已切换到中文 🇨🇳");
+  }
+
+  // ===== RESET =====
   if (
-    message.content.toLowerCase() === "reset" ||
-    message.content.toLowerCase() === "!new" ||
-    (message.mentions.has(client.user) && message.content.toLowerCase().includes("new"))
+    content === "reset" ||
+    content === "!new" ||
+    (message.mentions.has(client.user) && content.includes("new"))
   ) {
     conversations.delete(userId);
     activeUsers.delete(userId);
-
-    return message.reply("Đã reset cuộc trò chuyện 🆕");
+    return message.reply("Đã reset 🆕");
   }
 
   const isMention = message.mentions.has(client.user);
 
-  // bật chat khi tag
   if (isMention) {
     activeUsers.set(userId, Date.now());
   }
 
-  // chưa từng chat thì bỏ
   if (!isMention && !activeUsers.has(userId)) return;
 
-  // timeout 10 phút (tăng lên cho đỡ bị ngắt)
   const lastActive = activeUsers.get(userId);
+
   if (Date.now() - lastActive > 10 * 60 * 1000) {
     activeUsers.delete(userId);
     conversations.delete(userId);
@@ -118,13 +130,11 @@ client.on("messageCreate", async (message) => {
 
   activeUsers.set(userId, Date.now());
 
-  // lấy nội dung
   let prompt = message.content
     .replace(`<@${client.user.id}>`, "")
     .replace(`<@!${client.user.id}>`, "")
     .trim();
 
-  // lấy ảnh
   let imageUrl = null;
   if (message.attachments.size > 0) {
     imageUrl = message.attachments.first().url;
@@ -136,21 +146,47 @@ client.on("messageCreate", async (message) => {
     prompt = "Mô tả ảnh này";
   }
 
+  // ===== NGÔN NGỮ + PROMPT XỊN =====
+  const lang = userLang.get(userId) || "vi";
+
+  let systemPrompt = `
+Bạn là một AI nói chuyện tự nhiên như người thật.
+
+- Không trả lời máy móc
+- Không nói kiểu sách giáo khoa
+- Trả lời giống chat đời thường
+- Có thể thêm cảm xúc nhẹ 😄😅😎
+- Nếu hợp lý, hỏi lại để tiếp tục câu chuyện
+- Không nói "tôi là AI"
+
+Ngôn ngữ: ${
+    lang === "vi"
+      ? "Tiếng Việt"
+      : lang === "en"
+      ? "English"
+      : "中文"
+  }
+`;
+
   // ===== HISTORY =====
   if (!conversations.has(userId)) {
     conversations.set(userId, [
       {
         role: "system",
-        content: "Bạn là một AI thân thiện, trả lời ngắn gọn, dễ hiểu."
+        content: systemPrompt
       }
     ]);
   }
 
   const history = conversations.get(userId);
 
-  history.push({ role: "user", content: prompt });
+  history.push({
+    role: "user",
+    content: `Người dùng nói: ${prompt}`
+  });
 
-  if (history.length > 10) history.splice(1, 1);
+  // tăng memory
+  if (history.length > 20) history.splice(1, 1);
 
   try {
     await message.channel.sendTyping();
