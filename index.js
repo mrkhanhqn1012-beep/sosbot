@@ -1,6 +1,7 @@
 require("dotenv").config();
 
 const express = require("express");
+const axios = require("axios");
 const { Client, GatewayIntentBits } = require("discord.js");
 const OpenAI = require("openai");
 
@@ -11,9 +12,25 @@ app.get("/", (req, res) => {
   res.send("Bot is running!");
 });
 
-app.listen(process.env.PORT || 3000, () => {
-  console.log("Web server đang chạy");
+const PORT = process.env.PORT || 3000;
+
+app.listen(PORT, () => {
+  console.log("Web server đang chạy tại port", PORT);
 });
+
+// ===== AUTO PING (5 PHÚT) =====
+const URL = process.env.RENDER_URL; // set trong ENV
+
+if (URL) {
+  setInterval(async () => {
+    try {
+      await axios.get(URL);
+      console.log("Đã ping giữ bot sống");
+    } catch (err) {
+      console.error("Ping lỗi:", err.message);
+    }
+  }, 5 * 60 * 1000);
+}
 
 // ===== DISCORD =====
 const client = new Client({
@@ -69,7 +86,7 @@ client.on("messageCreate", async (message) => {
 
   const userId = message.author.id;
 
-  // ===== RESET CHAT (luôn hoạt động) =====
+  // ===== RESET CHAT =====
   if (
     message.content.toLowerCase() === "reset" ||
     message.content.toLowerCase() === "!new" ||
@@ -88,12 +105,12 @@ client.on("messageCreate", async (message) => {
     activeUsers.set(userId, Date.now());
   }
 
-  // chưa bật chat thì bỏ
+  // chưa từng chat thì bỏ
   if (!isMention && !activeUsers.has(userId)) return;
 
-  // timeout 2 phút
+  // timeout 10 phút (tăng lên cho đỡ bị ngắt)
   const lastActive = activeUsers.get(userId);
-  if (Date.now() - lastActive > 2 * 60 * 1000) {
+  if (Date.now() - lastActive > 10 * 60 * 1000) {
     activeUsers.delete(userId);
     conversations.delete(userId);
     return;
